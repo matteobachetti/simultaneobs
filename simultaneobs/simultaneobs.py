@@ -144,12 +144,13 @@ def get_table_from_heasarc(mission,
     table = table[good]
 
     log.info("Writing table to cache...")
-    table.write(cache_file, serialize_meta=True)
+    table.write(cache_file, serialize_meta=True, overwrite=True)
 
     return table
 
 
-def get_all_change_times(missions=None, mjdstart=None, mjdstop=None):
+def get_all_change_times(missions=None, mjdstart=None, mjdstop=None,
+                         ignore_cache=False):
     """
     Examples
     --------
@@ -176,7 +177,8 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None):
         if isinstance(catalog, Table):  # Mainly for testing purposes
             mission_table = catalog
         else:
-            mission_table = get_table_from_heasarc(mission)
+            mission_table = \
+                get_table_from_heasarc(mission, ignore_cache=ignore_cache)
 
         alltimes = np.transpose(np.vstack(
             (np.array(mission_table['mjdstart']),
@@ -209,12 +211,12 @@ def sync_all_timelines(mjdstart=None, mjdend=None, missions=None,
 
     # all_times = np.arange(mjdstart, mjdend, 500 / 86400)
     all_times = get_all_change_times(
-        missions, mjdstart=mjdstart, mjdstop=mjdend)
+        missions, mjdstart=mjdstart, mjdstop=mjdend, ignore_cache=ignore_cache)
 
     result_table = QTable({'mjd': all_times})
 
     for mission in missions:
-        mission_table = get_table_from_heasarc(mission, ignore_cache=False)
+        mission_table = get_table_from_heasarc(mission)
 
         cols = 'mjdstart,mjdend,ra,dec,obsid,name'.split(',')
         restab = get_rows_from_times(mission_table[cols], all_times)
@@ -304,13 +306,9 @@ def main(args=None):
                         help="MJD stop",
                         default=None, type=float)
 
-    parser.add_argument("--min-length", type=int,
-                        help="Minimum length of GTIs to consider",
-                        default=0)
-
-    parser.add_argument("--ignore-cache", type=str,
+    parser.add_argument("--ignore-cache", action='store_true',
                         help="Ignore cache file",
-                        default=None)
+                        default=False)
 
     args = parser.parse_args(args)
 
@@ -364,5 +362,6 @@ def main(args=None):
             for obsid1, obsid2 in zip(res[o1], res[o2])]
         res = unique(res, keys=['obsid_pairs'])
         res.remove_column('obsid_pairs')
-        res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True)
+        res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True,
+                  overwrite=True)
         res.write(f'{mission1}-{mission2}{mjdlabel}.csv', overwrite=True)
