@@ -121,7 +121,7 @@ def get_table_from_heasarc(mission,
 
     for key in ['obsid', 'name']:
         col = getattr(settings, key)
-        values = [f"{value}" for value in table[col]]
+        values = [value for value in table[col].iter_str_vals()]
         table.remove_column(col)
         table[key] = values
 
@@ -158,7 +158,7 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None,
     >>> table2 = Table({'mjdstart': np.arange(2.5, 5.5), 'mjdend': np.arange(3, 6)})
     >>> table3 = Table({'mjdstart': np.arange(2.5, 5.5), 'mjdend': np.arange(3, 6)})
     >>> table2['mjdstart'][:] = np.nan
-    >>> all_times = get_all_change_times(table_names=[table1, table2, table3],
+    >>> all_times = get_all_change_times(missions=[table1, table2, table3],
     ...     mjdstart=None, mjdstop=4.1)
     >>> np.allclose(all_times, [1, 2, 2.5, 3, 3.5, 4, 4.1])
     True
@@ -173,10 +173,10 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None,
         change_times = []
 
     for mission in missions:
-        catalog = mission_info[mission].tablename
-        if isinstance(catalog, Table):  # Mainly for testing purposes
-            mission_table = catalog
+        if isinstance(mission, Table):  # Mainly for testing purposes
+            mission_table = mission
         else:
+            catalog = mission_info[mission].tablename
             mission_table = \
                 get_table_from_heasarc(mission, ignore_cache=ignore_cache)
 
@@ -314,9 +314,9 @@ def main(args=None):
 
     mjdlabel = ''
     if args.mjdstart is not None:
-        mjdlabel += f'_gt{args.mjdstart}'
+        mjdlabel += f'_gt{args.mjdstart:g}'
     if args.mjdstop is not None:
-        mjdlabel += f'_lt{args.mjdstop}'
+        mjdlabel += f'_lt{args.mjdstop:g}'
 
     missionlabel = '_all'
     if len(args.missions) > 0:
@@ -324,7 +324,7 @@ def main(args=None):
 
     cache_filename = f"_timeline{missionlabel}{mjdlabel}.hdf5"
 
-    log.info("Loading all mission tables...")
+    log.info("Loading requested mission tables...")
     if os.path.exists(cache_filename) and not args.ignore_cache:
         synced_table = QTable.read(cache_filename)
     else:
