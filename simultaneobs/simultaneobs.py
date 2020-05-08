@@ -73,7 +73,6 @@ def get_rows_from_times(mission_table, times):
     >>> np.all(table['label'] == np.array(['', 'AA', 'BB', '', '']))
     True
     """
-    import copy
     # Avoid invalid values
     mission_table = mission_table[mission_table['mjdstart'] > 0]
     start, end = mission_table['mjdstart'], mission_table['mjdend']
@@ -328,7 +327,7 @@ def main(args=None):
     cache_filename = f"_timeline{missionlabel}{mjdlabel}.hdf5"
 
     log.info("Loading all mission tables...")
-    if os.path.exists(cache_filename):
+    if os.path.exists(cache_filename) and not args.ignore_cache:
         synced_table = QTable.read(cache_filename)
     else:
         synced_table = sync_all_timelines(mjdstart=args.mjdstart,
@@ -364,5 +363,5 @@ def main(args=None):
             for obsid1, obsid2 in zip(res[o1], res[o2])]
         res = unique(res, keys=['obsid_pairs'])
         res.remove_column('obsid_pairs')
-        res.write(f'{mission1}-{mission2}.hdf5')
-        res.write(f'{mission1}-{mission2}.csv')
+        res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True)
+        res.write(f'{mission1}-{mission2}{mjdlabel}.csv')
