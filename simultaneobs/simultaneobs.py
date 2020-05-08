@@ -1,9 +1,8 @@
-import time
 import os
 import argparse
 import copy
 import socket
-from collections.abc import Iterable
+from dataclasses import dataclass
 
 socket.setdefaulttimeout(600)  # set timeout to 10 minutes
 
@@ -13,201 +12,47 @@ from astropy.coordinates import SkyCoord
 from astropy.table import Table, QTable, Column, unique
 import astropy.units as u
 from astroquery.heasarc import Heasarc, Conf
+import pyvo as vo
 
 
-def convert_coords_to_3D_cartesian(ra, dec):
-    """
-    Examples
-    --------
-    >>> # It works with arrays
-    >>> pos = convert_coords_to_3D_cartesian([0, 90, 0], [0, 0, 90])
-    >>> np.allclose(pos, [[1, 0, 0], [0, 1, 0], [0, 0, 1]])
-    True
-    >>> # It works at other specific positions.
-    >>> pos = convert_coords_to_3D_cartesian(42, 90)
-    >>> np.allclose(pos, [0, 0, 1])
-    True
-    >>> pos = convert_coords_to_3D_cartesian(45, 0)
-    >>> np.allclose(pos, [np.sqrt(2)/2, np.sqrt(2)/2, 0])
-    True
-    >>> pos = convert_coords_to_3D_cartesian(0, 45)
-    >>> np.allclose(pos, [np.sqrt(2)/2, 0, np.sqrt(2)/2])
-    True
-    """
-    if isinstance(ra, Iterable):
-        ra = np.asarray(ra)
-        dec = np.asarray(dec)
-    ra = ra * np.pi / 180.
-    dec = dec * np.pi / 180.
-    pos = np.transpose(
-        np.vstack([np.cos(ra) * np.cos(dec),
-                   np.sin(ra) * np.cos(dec),
-                   np.sin(dec)]))
-    return pos
+@dataclass
+class StandardTableInfo(object):
+    tablename: str
+    time: str = "time"
+    end_time: str = 'end_time'
+    obsid: str = 'obsid'
+    ra: str = 'ra'
+    dec: str = 'dec'
+    name: str = 'name'
 
 
-def distance(array, position):
-    """
-    Examples
-    --------
-    >>> np.allclose(distance([[0, 1, 2], [0, 1, 3], [0, -1, 2]], [0, 1, 2]), [0, 1, 2])
-    True
-    """
-    return np.sqrt(np.sum((np.asarray(array) - np.asarray(position))**2, axis=1))
+def set_default_mission_info():
+    chandra_dict = StandardTableInfo('chanmaster', end_time=None)
+    hitomi_dict = StandardTableInfo('hitomaster', end_time='stop_time')
+    # integral_dict = copy.deepcopy(default)  # needs work
+    nicer_dict = StandardTableInfo('nicermastr')
+    nustar_dict = StandardTableInfo('numaster')
+    suzaku_dict = StandardTableInfo('suzamaster', end_time='stop_time')
+    swift_dict = StandardTableInfo('swiftmastr', time='start_time',
+                                   end_time='stop_time')
+    xmm_dict = StandardTableInfo('xmmmaster')
+    xte_dict = StandardTableInfo('xtemaster',
+                                 end_time=None, name='target_name')
+
+    mission_info = {'nustar': nustar_dict,
+                    'chandra': chandra_dict,
+                    'nicer': nicer_dict,
+                    'xmm': xmm_dict,
+                    'hitomi': hitomi_dict,
+                    'suzaku': suzaku_dict,
+                    'swift': swift_dict,
+                    'xte': xte_dict
+                    }
+
+    return mission_info
 
 
-def select_close_observations(t, time_array, time_tolerance=7):
-    # print(t, time_array)
-    best_time_idx = np.searchsorted(time_array, t)
-    if best_time_idx >= time_array.size:
-        return []
-
-    if best_time_idx <= 0:
-        return []
-
-    if np.abs(time_array[best_time_idx] - t) > time_tolerance:
-        return []
-
-    all_idx = [best_time_idx]
-    idx = best_time_idx - 1
-
-    while idx >= 0:
-        if np.abs(time_array[idx] - t) > time_tolerance:
-            break
-        all_idx.append(idx)
-        idx -= 1
-
-    idx = best_time_idx + 1
-    while idx < time_array.size:
-        if np.abs(time_array[idx] - t) > time_tolerance:
-            break
-        all_idx.append(idx)
-        idx += 1
-    return sorted(all_idx)
-
-
-def set_default_mission_dict():
-    from collections import defaultdict
-    default = dict(time="time", end_time='end_time', obsid='obsid', ra='ra', dec='dec', name='name')
-
-    chandra_dict = copy.deepcopy(default)
-    hitomi_dict = copy.deepcopy(default)
-    integral_dict = copy.deepcopy(default)  # needs work
-    nicer_dict = copy.deepcopy(default)
-    nustar_dict = copy.deepcopy(default)
-    suzaku_dict = copy.deepcopy(default)
-    swift_dict = copy.deepcopy(default)
-    xmm_dict = copy.deepcopy(default)
-    xte_dict = copy.deepcopy(default)
-
-    swift_dict['time'] = 'start_time'
-    swift_dict['end_time'] = 'stop_time'
-    hitomi_dict['end_time'] = 'stop_time'
-    suzaku_dict['end_time'] = 'stop_time'
-    xte_dict['name'] = 'target_name'
-    xte_dict['end_time'] = None
-    chandra_dict['end_time'] = None
-
-    mission_time_dict = {'numaster': nustar_dict,
-                         'chanmaster': chandra_dict,
-                         'nicermastr': nicer_dict,
-                         'xmmmaster': xmm_dict,
-                         'hitomaster': hitomi_dict,
-                         'suzamaster': suzaku_dict,
-                         'swiftmastr': swift_dict,
-                         'xtemaster': xte_dict
-                         }
-
-    return mission_time_dict
-
-
-mission_time_dict = set_default_mission_dict()
-
-
-def find_source_in_catalogs(coords, catalog_list):
-    heasarc = Heasarc()
-
-    tables = {}
-    for catalog in catalog_list:
-        time_col1 = mission_time_dict[catalog]['time']
-        log.info(f"Querying online catalog {catalog}... ")
-        table_mission = heasarc.query_region(
-            coords, mission=catalog, radius='1 degree', sortvar=time_col1,
-            fields=f'{time_col1},RA,DEC,NAME,OBSID',
-            resultmax=1000000, timeout=600)
-        table_mission['OBSID'] = [str(obsid) for obsid in table_mission['OBSID']]
-        tables[catalog] = table_mission
-    log.info('Done')
-    return tables
-
-
-def cross_two_tables(coords, table1_name='numaster', table2_name='swiftmastr'):
-    conf = Conf()
-    conf.timeout = 600
-    heasarc = Heasarc()
-
-    time_col1 = mission_time_dict[table1_name]['time']
-    time_col2 = mission_time_dict[table2_name]['time']
-
-    tables = find_source_in_catalogs(coords, [table1_name, table2_name])
-    table_mission1, table_mission2 = tables[table1_name], tables[table2_name]
-    time_tolerance = 7
-
-    max_dist = 1 * u.deg
-    mission1_coords = convert_coords_to_3D_cartesian(
-        table_mission1['RA'], table_mission1['DEC'])
-    mission2_coords = convert_coords_to_3D_cartesian(
-        table_mission2['RA'], table_mission2['DEC'])
-    source_coords = convert_coords_to_3D_cartesian(coords.ra, coords.dec)
-
-    mission1_time = table_mission1[time_col1]
-
-    all_matches = Table(names=[f'{table1_name} TIME', f'{table1_name} TARGET',
-                               f'{table1_name} OBSID', f'{table1_name} distance (´)',
-                               f'{table2_name} TIME', f'{table2_name} TARGET',
-                               f'{table2_name} OBSID', f'{table2_name} distance (´)'],
-                        dtype=[float,   'U11',     'U11',    float,
-                               float,   'U11',     'U11',    float])
-
-    for i_n, t in enumerate(mission1_time):
-        mission1_row = table_mission1[i_n]
-        idx = select_close_observations(
-            t, table_mission2[time_col2], time_tolerance=time_tolerance)
-
-        distance_1 = distance(mission1_coords[i_n], source_coords) * u.rad
-        distances_2 = distance(mission2_coords[idx], source_coords) * u.rad
-
-        for i, dist in zip(idx, distances_2):
-            if dist > max_dist:
-                continue
-            all_matches.add_row(
-                (mission1_row[time_col1], mission1_row['NAME'], mission1_row['OBSID'], distance_1.to(u.arcminute).value,
-                 table_mission2[time_col2][i], table_mission2['NAME'][i], table_mission2['OBSID'][i],
-                 dist.to(u.arcminute).value))
-
-    return all_matches
-
-
-
-def get_precise_position(source):
-    from astroquery.simbad import Simbad
-    heasarc = Heasarc()
-
-    try:
-        result_table = heasarc.query_object(source, mission='atnfpulsar',
-                fields=f'RA,DEC')
-        pos = result_table[0]
-        ra, dec = pos['RA'] * u.deg, pos['DEC'] * u.deg
-        coords = SkyCoord(ra, dec, frame='icrs')
-    except (ValueError, TypeError):
-        log.warning("Not found in ATNF; searching Simbad")
-        result_table = Simbad.query_object(source)
-        pos = result_table[0]
-        ra, dec = pos['RA'], pos['DEC']
-        coords = SkyCoord(ra, dec, frame='icrs', unit=(u.hourangle, u.deg))
-    log.info(f"Precise position: {ra}, {dec}")
-
-    return coords
+mission_info = set_default_mission_info()
 
 
 def get_rows_from_times(mission_table, times):
@@ -234,9 +79,7 @@ def get_rows_from_times(mission_table, times):
     start, end = mission_table['mjdstart'], mission_table['mjdend']
     idxs = np.searchsorted(start, times + 1 / 86400)
 
-    # print(start, end, times)
     result_table = QTable()
-    # example_tab = copy.deepcopy(mission_table[:1])
     good = (times >= start[0])&(times <=end[-1])
     places_to_change = mission_table[idxs[good] - 1]
     for col in mission_table.colnames:
@@ -247,10 +90,10 @@ def get_rows_from_times(mission_table, times):
     return result_table
 
 
-def get_table_from_heasarc(table,
+def get_table_from_heasarc(mission,
         max_entries=10000000, use_cache=True):
-    import pyvo as vo
-    cache_file = f'_{table}_table_cache.hdf5'
+    settings = mission_info[mission]
+    cache_file = f'_{settings.tablename}_table_cache.hdf5'
 
     if use_cache and os.path.exists(cache_file):
         log.info(f"Getting cached table {cache_file}...")
@@ -261,41 +104,42 @@ def get_table_from_heasarc(table,
     heasarc_tap = vo.dal.TAPService(
         "https://heasarc.gsfc.nasa.gov/xamin/vo/tap/")
 
-    settings = mission_time_dict[table]
-    colnames = (f"{settings['time']},"
-                f"{settings['ra']},{settings['dec']},"
-                f"{settings['name']},{settings['obsid']}")
+    colnames = (f"{settings.time},"
+                f"{settings.ra},{settings.dec},"
+                f"{settings.name},{settings.obsid}")
 
-    if settings['end_time'] is not None:
-        colnames += f",{settings['end_time']}"
+    if settings.end_time is not None:
+        colnames += f",{settings.end_time}"
 
     query = f"""SELECT
     TOP {max_entries}
     "__row", {colnames}
-    FROM {table}
+    FROM {settings.tablename}
     """
 
+    log.info(f"Querying {settings.tablename} table...")
     table = heasarc_tap.search(query).to_table()
 
     for key in ['obsid', 'name']:
-        values = [f"{value}" for value in table[settings[key]]]
-        table.remove_column(settings[key])
+        col = getattr(settings, key)
+        values = [f"{value}" for value in table[col]]
+        table.remove_column(col)
         table[key] = values
 
-    for key in ['__row']:
-        values = [float(value) for value in table[key]]
-        table.remove_column(key)
-        table[key] = values
+    for col in ['__row']:
+        values = [float(value) for value in table[col]]
+        table.remove_column(col)
+        table[col] = values
 
-    table.rename_column(settings['time'], 'mjdstart')
+    table.rename_column(settings.time, 'mjdstart')
 
     table.sort('mjdstart')
 
-    if settings['end_time'] is None:
+    if settings.end_time is None:
         table['mjdend'] = \
             np.concatenate((table['mjdstart'][1:], table['mjdstart'][-1:] + 1))
     else:
-        table.rename_column(settings['end_time'], 'mjdend')
+        table.rename_column(settings.end_time, 'mjdend')
 
     good = table['mjdend'] > table['mjdstart']
     table = table[good]
@@ -307,7 +151,7 @@ def get_table_from_heasarc(table,
     return table
 
 
-def get_all_change_times(table_names=None, mjdstart=None, mjdstop=None):
+def get_all_change_times(missions=None, mjdstart=None, mjdstop=None):
     """
     Examples
     --------
@@ -321,24 +165,24 @@ def get_all_change_times(table_names=None, mjdstart=None, mjdstop=None):
     True
     """
 
-    if table_names is None:
-        table_names = list(mission_time_dict.keys())
+    if missions is None or len(missions) == 0:
+        missions = list(mission_info.keys())
 
     if mjdstart is not None:
         change_times = [[mjdstart]]
     else:
         change_times = []
 
-    for catalog in table_names:
+    for mission in missions:
+        catalog = mission_info[mission].tablename
         if isinstance(catalog, Table):  # Mainly for testing purposes
             mission_table = catalog
-            time_col = 'mjdstart'
-            end_time_col = 'mjdend'
         else:
-            mission_table = get_table_from_heasarc(catalog)
+            mission_table = get_table_from_heasarc(mission)
 
         alltimes = np.transpose(np.vstack(
-            (np.array(mission_table['mjdstart']), np.array(mission_table['mjdend']))
+            (np.array(mission_table['mjdstart']),
+             np.array(mission_table['mjdend']))
             )).flatten()
 
         good = ~np.isnan(alltimes)
@@ -353,33 +197,25 @@ def get_all_change_times(table_names=None, mjdstart=None, mjdstop=None):
         change_times.append([mjdstop])
 
     change_times = np.unique(np.concatenate(change_times))
-    # change_times = change_times[~np.isnan(change_times)]
     return change_times[change_times > 0]
 
 
-def sync_all_timelines(mjdstart=None, mjdend=None, table_names=None):
+def sync_all_timelines(mjdstart=None, mjdend=None, missions=None):
     conf = Conf()
     conf.timeout = 600
     heasarc = Heasarc()
 
-    if table_names is None:
-        table_names = list(mission_time_dict.keys())
+    if missions is None or len(missions) == 0:
+        missions = list(mission_info.keys())
 
     # all_times = np.arange(mjdstart, mjdend, 500 / 86400)
     all_times = get_all_change_times(
-        table_names, mjdstart=mjdstart, mjdstop=mjdend)
+        missions, mjdstart=mjdstart, mjdstop=mjdend)
 
     result_table = QTable({'mjd': all_times})
 
-    time_cols_names = [mission_time_dict[name]['time'] for name in table_names]
-
-    all_tables = {}
-    for catalog in table_names:
-        print(catalog)
-        time_col = mission_time_dict[catalog]['time']
-        end_time_col = mission_time_dict[catalog]['end_time']
-
-        mission_table = get_table_from_heasarc(catalog)
+    for mission in missions:
+        mission_table = get_table_from_heasarc(mission)
 
         cols = 'mjdstart,mjdend,ra,dec,obsid,name'.split(',')
         restab = get_rows_from_times(mission_table[cols], all_times)
@@ -388,9 +224,9 @@ def sync_all_timelines(mjdstart=None, mjdend=None, table_names=None):
             SkyCoord(np.array(restab['ra']),
                      np.array(restab['dec']), unit=('degree', 'degree'))
         for col in cols:
-            result_table[f'{catalog} {col}'] = restab[col]
+            result_table[f'{mission} {col}'] = restab[col]
 
-        result_table[f'{catalog} coords'] = restab['skycoords']
+        result_table[f'{mission} coords'] = restab['skycoords']
 
     return result_table
 
@@ -445,26 +281,10 @@ def filter_for_low_separations(table, max_dist=7 * u.arcmin, keyword='dist'):
     dist_cols = [col for col in table.colnames if keyword in col]
     mask = np.zeros(len(table), dtype=bool)
     for col in dist_cols:
-        mask = mask | (table[col] <= max_dist)
+        good = ~np.isnan(table[col])
+        good = good & (table[col] <= max_dist)
+        mask = mask | good
     return table[mask]
-
-
-def pulsar_cross_match():
-    targets = ['Crab', 'PSR J1824-2452A', 'PSR J1939+2134', 'HER X-1']
-    missions = ['nicermastr', 'numaster', 'swiftmastr', 'xmmmaster', 'chanmaster']
-
-    for target in targets:
-        print(f"\n\nTarget: {target}\n")
-        pos = get_precise_position(target)
-
-        for i, mission1 in enumerate(missions):
-            for mission2 in missions[i+1:]:
-                # try:
-                matches = cross_two_tables(pos, mission1, mission2)
-                if len(matches) > 0:
-                    print(matches)
-                else:
-                    print("No matches found")
 
 
 def main(args=None):
@@ -475,7 +295,7 @@ def main(args=None):
     parser.add_argument("missions",
                         help="Mission tables. Leave "
                              "blank for all supported missions",
-                        type=str, nargs='+', default=None)
+                        type=str, nargs='*')
 
     parser.add_argument("--mjdstart",
                         help="MJD start",
@@ -489,27 +309,43 @@ def main(args=None):
                         help="Minimum length of GTIs to consider",
                         default=0)
 
+    parser.add_argument("--ignore-cache", type=str,
+                        help="Ignore cache file",
+                        default=None)
+
     args = parser.parse_args(args)
 
+    mjdlabel = ''
+    if args.mjdstart is not None:
+        mjdlabel += f'_gt{args.mjdstart}'
+    if args.mjdstop is not None:
+        mjdlabel += f'_lt{args.mjdstop}'
+
+    missionlabel = '_all'
+    if len(args.missions) > 0:
+        missionlabel = "_" + '+'.join(args.missions)
+
+    cache_filename = f"_timeline{missionlabel}{mjdlabel}.hdf5"
+
     log.info("Loading all mission tables...")
-    if os.path.exists("full_timeline.hdf5"):
-        synced_table = QTable.read("full_timeline.hdf5")
+    if os.path.exists(cache_filename):
+        synced_table = QTable.read(cache_filename)
     else:
         synced_table = sync_all_timelines(mjdstart=args.mjdstart,
                                           mjdend=args.mjdstop,
-                                          table_names=args.missions)
-        synced_table.write("rough_timeline.ecsv", overwrite=True)
+                                          missions=args.missions)
         log.info("Calculating separations...")
         synced_table = get_all_separations(synced_table, keyword='coords')
-        synced_table.write("full_timeline.hdf5", overwrite=True)
+        synced_table.write(cache_filename, overwrite=True,
+                           serialize_meta=True)
 
     cols = [col for col in synced_table.colnames if 'dist_' in col]
     for col in cols:
         mission1, mission2 = col.replace('dist_', '').split('--')
+        log.info(f"Searching for matches between {mission1} and {mission2}")
         good = ~np.isnan(synced_table[col])
         good = good&(synced_table[col] <= 30 * u.arcmin)
 
-        # print(np.min(synced_table[col][good]))
         res = copy.deepcopy(synced_table[good])
         if len(res) == 0:
             log.warning("No combinations here.")
@@ -530,4 +366,3 @@ def main(args=None):
         res.remove_column('obsid_pairs')
         res.write(f'{mission1}-{mission2}.hdf5')
         res.write(f'{mission1}-{mission2}.csv')
-
