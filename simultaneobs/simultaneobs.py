@@ -90,11 +90,11 @@ def get_rows_from_times(mission_table, times):
 
 
 def get_table_from_heasarc(mission,
-        max_entries=10000000, use_cache=True):
+        max_entries=10000000, ignore_cache=False):
     settings = mission_info[mission]
     cache_file = f'_{settings.tablename}_table_cache.hdf5'
 
-    if use_cache and os.path.exists(cache_file):
+    if not ignore_cache and os.path.exists(cache_file):
         log.info(f"Getting cached table {cache_file}...")
         table = Table.read(cache_file)
         log.info("Done")
@@ -143,9 +143,8 @@ def get_table_from_heasarc(mission,
     good = table['mjdend'] > table['mjdstart']
     table = table[good]
 
-    if use_cache:
-        log.info("Writing table to cache...")
-        table.write(cache_file, serialize_meta=True)
+    log.info("Writing table to cache...")
+    table.write(cache_file, serialize_meta=True)
 
     return table
 
@@ -199,7 +198,8 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None):
     return change_times[change_times > 0]
 
 
-def sync_all_timelines(mjdstart=None, mjdend=None, missions=None):
+def sync_all_timelines(mjdstart=None, mjdend=None, missions=None,
+                       ignore_cache=False):
     conf = Conf()
     conf.timeout = 600
     heasarc = Heasarc()
@@ -214,7 +214,7 @@ def sync_all_timelines(mjdstart=None, mjdend=None, missions=None):
     result_table = QTable({'mjd': all_times})
 
     for mission in missions:
-        mission_table = get_table_from_heasarc(mission)
+        mission_table = get_table_from_heasarc(mission, ignore_cache=False)
 
         cols = 'mjdstart,mjdend,ra,dec,obsid,name'.split(',')
         restab = get_rows_from_times(mission_table[cols], all_times)
@@ -332,7 +332,8 @@ def main(args=None):
     else:
         synced_table = sync_all_timelines(mjdstart=args.mjdstart,
                                           mjdend=args.mjdstop,
-                                          missions=args.missions)
+                                          missions=args.missions,
+                                          ignore_cache=args.ignore_cache)
         log.info("Calculating separations...")
         synced_table = get_all_separations(synced_table, keyword='coords')
         synced_table.write(cache_filename, overwrite=True,
@@ -364,4 +365,4 @@ def main(args=None):
         res = unique(res, keys=['obsid_pairs'])
         res.remove_column('obsid_pairs')
         res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True)
-        res.write(f'{mission1}-{mission2}{mjdlabel}.csv')
+        res.write(f'{mission1}-{mission2}{mjdlabel}.csv', overwrite=True)
