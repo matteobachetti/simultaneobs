@@ -4,15 +4,15 @@ import copy
 import socket
 from dataclasses import dataclass
 
-socket.setdefaulttimeout(600)  # set timeout to 10 minutes
-
 import numpy as np
 from astropy import log
 from astropy.coordinates import SkyCoord
-from astropy.table import Table, QTable, Column, unique
+from astropy.table import Table, QTable, unique
 import astropy.units as u
 from astroquery.heasarc import Heasarc, Conf
 import pyvo as vo
+
+socket.setdefaulttimeout(600)  # set timeout to 10 minutes
 
 
 @dataclass
@@ -79,7 +79,7 @@ def get_rows_from_times(mission_table, times):
     idxs = np.searchsorted(start, times + 1 / 86400)
 
     result_table = QTable()
-    good = (times >= start[0])&(times <=end[-1])
+    good = (times >= start[0]) & (times <= end[-1])
     places_to_change = mission_table[idxs[good] - 1]
     for col in mission_table.colnames:
         newarr = np.zeros(times.size, dtype=mission_table[col].dtype)
@@ -89,8 +89,8 @@ def get_rows_from_times(mission_table, times):
     return result_table
 
 
-def get_table_from_heasarc(mission,
-        max_entries=10000000, ignore_cache=False):
+def get_table_from_heasarc(
+        mission, max_entries=10000000, ignore_cache=False):
     settings = mission_info[mission]
     cache_file = f'_{settings.tablename}_table_cache.hdf5'
 
@@ -176,7 +176,6 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None,
         if isinstance(mission, Table):  # Mainly for testing purposes
             mission_table = mission
         else:
-            catalog = mission_info[mission].tablename
             mission_table = \
                 get_table_from_heasarc(mission, ignore_cache=ignore_cache)
 
@@ -204,12 +203,10 @@ def sync_all_timelines(mjdstart=None, mjdend=None, missions=None,
                        ignore_cache=False):
     conf = Conf()
     conf.timeout = 600
-    heasarc = Heasarc()
 
     if missions is None or len(missions) == 0:
         missions = list(mission_info.keys())
 
-    # all_times = np.arange(mjdstart, mjdend, 500 / 86400)
     all_times = get_all_change_times(
         missions, mjdstart=mjdstart, mjdstop=mjdend, ignore_cache=ignore_cache)
 
@@ -342,7 +339,7 @@ def main(args=None):
         mission1, mission2 = col.replace('dist_', '').split('--')
         log.info(f"Searching for matches between {mission1} and {mission2}")
         good = ~np.isnan(synced_table[col])
-        good = good&(synced_table[col] <= 30 * u.arcmin)
+        good = good & (synced_table[col] <= 30 * u.arcmin)
 
         res = copy.deepcopy(synced_table[good])
         if len(res) == 0:
@@ -364,4 +361,83 @@ def main(args=None):
         res.remove_column('obsid_pairs')
         res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True,
                   overwrite=True)
-        res.write(f'{mission1}-{mission2}{mjdlabel}.csv', overwrite=True)
+
+
+def split_missions_and_dates(fname):
+    """
+
+    Examples
+    --------
+    >>> fname = 'nustar-nicer_gt55000_lt58000.csv'
+    >>> outdict = split_missions_and_dates(fname)
+    >>> outdict['mission1']
+    'nustar'
+    >>> outdict['mission2']
+    'nicer'
+    >>> outdict['mjdstart']
+    'MJD 55000'
+    >>> outdict['mjdstop']
+    'MJD 58000'
+    >>> fname = 'nustar-nicer.csv'
+    >>> outdict = split_missions_and_dates(fname)
+    >>> outdict['mission1']
+    'nustar'
+    >>> outdict['mission2']
+    'nicer'
+    >>> outdict['mjdstart']
+    'Mission start'
+    >>> outdict['mjdstop']
+    'Today'
+    """
+    no_ext = os.path.splitext(fname)[0]
+    split_date = no_ext.split('_')
+    mjdstart = 'Mission start'
+    mjdstop = 'Today'
+    if len(split_date) > 1:
+        for date_str in split_date[1:]:
+            if 'gt' in date_str:
+                mjdstart = 'MJD ' + date_str.replace('gt', '')
+            elif 'lt' in date_str:
+                mjdstop = 'MJD ' + date_str.replace('lt', '')
+
+    mission1, mission2 = split_date[0].split('-')
+    outdict = {'mission1': mission1, 'mission2': mission2,
+               'mjdstart': mjdstart, 'mjdstop': mjdstop}
+    return outdict
+
+
+def summary(args=None):
+    description = 'Create summary page'
+    parser = argparse.ArgumentParser(description=description)
+
+    parser.add_argument("files",
+                        help="List of files of kind "
+                             "mission1-mission2.{hdf5,csv}",
+                        type=str, nargs='+')
+
+    parser.add_argument("-o", '--output', help='Output rst file',
+                        default='outpage.rst', type=str)
+
+    args = parser.parse_args(args)
+
+    with open(args.output, 'w') as fobj:
+        for fname in args.files:
+            outdict = split_missions_and_dates(fname)
+            mission1 = outdict['mission1'].capitalize()
+            mission2 = outdict['mission2'].capitalize()
+            start = outdict['mjdstart']
+            stop = outdict['mjdstop']
+
+            title_str = (f'{mission1} - {mission2} matches'
+                         f' (between {start} and {stop})')
+
+            print(title_str, file=fobj)
+            print('-' * len(title_str) + '\n', file=fobj)
+
+            table = QTable.read(fname)
+            cols = [col for col in table.colnames if
+                    'obsid' in col or 'mjd' in col or 'name' in col]
+
+            table[cols].write(fobj, format='ascii.rst')
+
+            print(file=fobj)
