@@ -9,7 +9,6 @@ from astropy import log
 from astropy.coordinates import SkyCoord
 from astropy.table import Table, QTable, unique
 import astropy.units as u
-from astroquery.heasarc import Heasarc, Conf
 import pyvo as vo
 
 socket.setdefaulttimeout(600)  # set timeout to 10 minutes
@@ -201,8 +200,6 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None,
 
 def sync_all_timelines(mjdstart=None, mjdend=None, missions=None,
                        ignore_cache=False):
-    conf = Conf()
-    conf.timeout = 600
 
     if missions is None or len(missions) == 0:
         missions = list(mission_info.keys())

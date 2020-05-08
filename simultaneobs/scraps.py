@@ -3,9 +3,9 @@ import numpy as np
 from astropy import log
 from astropy.coordinates import SkyCoord
 from astroquery.simbad import Simbad
-from astroquery.heasarc import Heasarc, Conf
+from astroquery.heasarc import Heasarc  # , Conf
 import astropy.units as u
-from astropy.table import Table
+# from astropy.table import Table
 
 
 def convert_coords_to_3D_cartesian(ra, dec):
@@ -83,8 +83,8 @@ def get_precise_position(source):
     heasarc = Heasarc()
 
     try:
-        result_table = heasarc.query_object(source, mission='atnfpulsar',
-                fields=f'RA,DEC')
+        result_table = heasarc.query_object(
+            source, mission='atnfpulsar', fields=f'RA,DEC')
         pos = result_table[0]
         ra, dec = pos['RA'] * u.deg, pos['DEC'] * u.deg
         coords = SkyCoord(ra, dec, frame='icrs')
@@ -140,8 +140,10 @@ def get_precise_position(source):
 #             if dist > max_dist:
 #                 continue
 #             all_matches.add_row(
-#                 (mission1_row[time_col1], mission1_row['NAME'], mission1_row['OBSID'], distance_1.to(u.arcminute).value,
-#                  table_mission2[time_col2][i], table_mission2['NAME'][i], table_mission2['OBSID'][i],
+#                 (mission1_row[time_col1], mission1_row['NAME'],
+#                  mission1_row['OBSID'], distance_1.to(u.arcminute).value,
+#                  table_mission2[time_col2][i], table_mission2['NAME'][i],
+#                  table_mission2['OBSID'][i],
 #                  dist.to(u.arcminute).value))
 #
 #     return all_matches
