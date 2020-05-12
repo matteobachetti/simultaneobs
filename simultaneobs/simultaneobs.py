@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 from astropy import log
 from astropy.coordinates import SkyCoord
-from astropy.table import Table, QTable, unique
+from astropy.table import Table, QTable, unique, vstack
 import astropy.units as u
 import pyvo as vo
 
@@ -23,18 +23,27 @@ class StandardTableInfo(object):
     ra: str = 'ra'
     dec: str = 'dec'
     name: str = 'name'
+    mode_entries: list = None
 
 
 def set_default_mission_info():
     chandra_dict = StandardTableInfo('chanmaster', end_time=None)
     hitomi_dict = StandardTableInfo('hitomaster', end_time='stop_time')
-    # integral_dict = copy.deepcopy(default)  # needs work
+    integral_dict = StandardTableInfo(
+        'intscw', name='obs_type',
+        time='start_date', end_time='end_date', obsid='obs_id',
+        mode_entries=['spi_mode', 'ibis_mode',
+                      'jemx1_mode', 'jemx2_mode', 'omc_mode'])
     nicer_dict = StandardTableInfo('nicermastr')
     nustar_dict = StandardTableInfo('numaster')
     suzaku_dict = StandardTableInfo('suzamaster', end_time='stop_time')
     swift_dict = StandardTableInfo('swiftmastr', time='start_time',
                                    end_time='stop_time')
-    xmm_dict = StandardTableInfo('xmmmaster')
+
+    xmm_dict = StandardTableInfo(
+        'xmmmaster', mode_entries=['mos1_mode', 'mos2_mode',
+                                   'pn_mode', 'rgs1_mode', 'rgs2_mode'])
+
     xte_dict = StandardTableInfo('xtemaster',
                                  end_time=None, name='target_name')
 
@@ -42,6 +51,7 @@ def set_default_mission_info():
                     'chandra': chandra_dict,
                     'nicer': nicer_dict,
                     'xmm': xmm_dict,
+                    'integral': integral_dict,
                     'hitomi': hitomi_dict,
                     'suzaku': suzaku_dict,
                     'swift': swift_dict,
@@ -93,6 +103,9 @@ def get_table_from_heasarc(
     settings = mission_info[mission]
     cache_file = f'_{settings.tablename}_table_cache.hdf5'
 
+    if mission == 'integral':
+        log.warning(
+            "The target name is not available in the INTEGRAL master table")
     if not ignore_cache and os.path.exists(cache_file):
         log.info(f"Getting cached table {cache_file}...")
         table = Table.read(cache_file)
@@ -109,6 +122,11 @@ def get_table_from_heasarc(
     if settings.end_time is not None:
         colnames += f",{settings.end_time}"
 
+    if settings.mode_entries is not None:
+        entries = ','.join(settings.mode_entries)
+        colnames += f",{entries}"
+
+    print(colnames)
     query = f"""SELECT
     TOP {max_entries}
     "__row", {colnames}
@@ -117,12 +135,18 @@ def get_table_from_heasarc(
 
     log.info(f"Querying {settings.tablename} table...")
     table = heasarc_tap.search(query).to_table()
-
+    # print(table)
     for key in ['obsid', 'name']:
         col = getattr(settings, key)
         values = [value for value in table[col].iter_str_vals()]
         table.remove_column(col)
         table[key] = values
+
+    if settings.mode_entries is not None:
+        for col in settings.mode_entries:
+            values = [value for value in table[col].iter_str_vals()]
+            table.remove_column(col)
+            table[col] = values
 
     for col in ['__row']:
         values = [float(value) for value in table[col]]
@@ -196,6 +220,24 @@ def get_all_change_times(missions=None, mjdstart=None, mjdstop=None,
 
     change_times = np.unique(np.concatenate(change_times))
     return change_times[change_times > 0]
+
+
+def filter_table_with_obsids(mission_table, obsid_list):
+    """
+    Examples
+    --------
+    >>> table = Table({'obsid': ['0101', '0101', '2345', '5656', '9090'],
+    ...                'mjd': [57000, 57000, 58000, 59000, 60000]})
+    >>> filt = filter_table_with_obsids(table, ['0101', '5656', '5656'])
+    >>> np.allclose(filt['mjd'], [57000, 57000, 59000, 59000])
+    True
+    """
+    tables = []
+    for obsid in obsid_list:
+        mask = (mission_table['obsid'] == obsid)
+        tables.append(mission_table[mask])
+
+    return vstack(tables)
 
 
 def sync_all_timelines(mjdstart=None, mjdend=None, missions=None,
@@ -356,7 +398,22 @@ def main(args=None):
             for obsid1, obsid2 in zip(res[o1], res[o2])]
         res = unique(res, keys=['obsid_pairs'])
         res.remove_column('obsid_pairs')
+
+        mission_table1 = filter_table_with_obsids(
+            get_table_from_heasarc(mission1), res[o1])
+        mission_table2 = filter_table_with_obsids(
+            get_table_from_heasarc(mission2), res[o2])
+
+        if mission_info[mission1].mode_entries is not None:
+            for col in mission_info[mission1].mode_entries:
+                res[f'{mission1} {col}'] = mission_table1[col]
+        if mission_info[mission2].mode_entries is not None:
+            for col in mission_info[mission2].mode_entries:
+                res[f'{mission2} {col}'] = mission_table2[col]
+
         res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True,
+                  overwrite=True)
+        res.write(f'{mission1}-{mission2}{mjdlabel}.ecsv',
                   overwrite=True)
 
 
