@@ -31,7 +31,7 @@ def set_default_mission_info():
     hitomi_dict = StandardTableInfo('hitomaster', end_time='stop_time')
     integral_dict = StandardTableInfo(
         'intscw', name='obs_type',
-        time='start_date', end_time='end_date', obsid='obs_id',
+        time='start_date', end_time='end_date', obsid='scw_id',
         mode_entries=['spi_mode', 'ibis_mode',
                       'jemx1_mode', 'jemx2_mode', 'omc_mode'])
     nicer_dict = StandardTableInfo('nicermastr')
@@ -401,6 +401,7 @@ def main(args=None):
 
         mission_table1 = filter_table_with_obsids(
             get_table_from_heasarc(mission1), res[o1])
+
         mission_table2 = filter_table_with_obsids(
             get_table_from_heasarc(mission2), res[o2])
 
@@ -412,7 +413,7 @@ def main(args=None):
                 res[f'{mission2} {col}'] = mission_table2[col]
 
         res.write(f'{mission1}-{mission2}{mjdlabel}.hdf5', serialize_meta=True,
-                  overwrite=True)
+                   overwrite=True)
         res.write(f'{mission1}-{mission2}{mjdlabel}.ecsv',
                   overwrite=True)
 
