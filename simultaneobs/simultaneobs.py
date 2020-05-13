@@ -234,6 +234,9 @@ def filter_table_with_obsids(mission_table, obsid_list):
     """
     tables = []
     for obsid in obsid_list:
+        if obsid == "":
+            log.error(f"Invalid obsid value: {obsid}")
+        # print(obsid, type(obsid))
         mask = (mission_table['obsid'] == obsid)
         tables.append(mission_table[mask])
 
